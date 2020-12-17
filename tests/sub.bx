@@ -1,0 +1,9 @@
+// subtraction
+
+proc main() {
+  var x = 42 : int;
+  var y = 84 : int;
+  print(y - x);
+  var z = x - y : int;
+  print(z);
+}

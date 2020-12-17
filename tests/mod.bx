@@ -1,0 +1,13 @@
+// modulus
+
+proc main() {
+  var x = 42, y = -84 : int;
+  print(y % x);
+  print(x % y);
+  var z = y % x : int;
+  print(z);
+  x = -201;
+  y = 200;
+  print(x % y);
+  print(y % x);
+}

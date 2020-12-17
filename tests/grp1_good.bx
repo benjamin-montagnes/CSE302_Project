@@ -1,0 +1,62 @@
+// Contributed: Sunho Hwang, Tarcisio Soares, Diego Gomez
+// Date: 2020/10/15
+// Git hash: 41810186e5d4429a564278ef11a92763e4baa6ae
+
+proc anotherone() :int {
+    var x = 5: int;
+    if (1==1) {
+        x = 5 + 6;
+        var y = x + 7: int;
+    }
+    var y = 5: int;
+    return y;
+}
+
+
+proc check_return(n: int) : bool{
+    if (n%2 == 0) {
+        return true;
+    }
+    else{
+        return false;
+    }
+}
+
+proc var_check1() {
+    var w = 10: int;
+    var i = 0: int;
+    while( i <10) {
+        w = 2 +5;
+        i = i + 1;
+    }
+
+}
+
+proc var_check2() {
+    var b = true : bool;
+    var d = false: bool;
+    print(b&&d);
+    if (b) {
+        var b = 6: int;
+        var d = 8: int;
+        print(b <d);
+    }
+}
+
+proc main2() : int {
+    var x = 5 : int ;
+    if (1==1) {
+        var x = true: bool ;
+        if (x) {
+              var x = 15: int;
+              var y = 15 - 7 : int;
+              return y;
+        } else {
+              return 1;
+        }
+    } else {
+        return x;
+    }
+}
+
+proc main() { main2(); }

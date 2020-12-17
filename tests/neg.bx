@@ -1,0 +1,10 @@
+// negation
+
+proc main() {
+  var x = 42 : int;
+  print(-x);
+  var y = -x : int;
+  print(y);
+  print(--x);
+  print(---x);
+}

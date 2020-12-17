@@ -1,0 +1,7 @@
+// copy
+
+proc main() {
+  var x = 42 : int;
+  var y = x : int;
+  print(y);
+}

@@ -1,0 +1,16 @@
+// simple booleans
+
+proc main() {
+  if (true)           { print(10); }
+  if (false)          { print(11); }
+  if (true  || true)  { print(12); }
+  if (true  || false) { print(13); }
+  if (false || true)  { print(14); }
+  if (false || false) { print(15); }
+  if (true  && true)  { print(16); }
+  if (true  && false) { print(17); }
+  if (false && true)  { print(18); }
+  if (false && false) { print(19); }
+  if (! true)         { print(20); }
+  if (! false)        { print(21); }
+}

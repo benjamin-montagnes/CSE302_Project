@@ -1,0 +1,17 @@
+// Contributed: Ashish Nayak, Xingjian Zhang
+// Date: 2020/10/14
+// Git hash: 392d54c1deda06a5f91f083663de16756465dd1f
+
+// function call
+
+proc sum(n : int) : int {
+    if (n <= 0) {
+        return 0;
+    }
+
+    return sum(n) + sum(n - 1);
+}
+
+proc main() {
+    print(sum(10));
+}

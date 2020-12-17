@@ -1,0 +1,16 @@
+// bit operations
+
+proc main() {
+  var x = 10843 : int;
+  var y = 13394 : int;
+  print(x | y);
+  print(x & y);
+  print(x ^ y);
+  print(~ x);
+  print(~ y);
+  print(x + ~ x);
+  print(x >> 3);
+  print(x << 3);
+  print(-x >> 3);
+  print(-x << 3);
+}

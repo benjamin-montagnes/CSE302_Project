@@ -1,0 +1,27 @@
+// Contributed: Noah Sarfati, Joshua Paul Jacob
+// Date: 2020/10/16
+// Git hash: fdd816b61a024f34d43f9f6ab258ac25d5ef99a4
+
+// Authors: Joshua & Noah
+
+var x = 0, y = 2: int;
+var z = 3 : int;
+
+proc main() {
+    recurse();
+    y = z + 5;
+}
+
+proc recurse() {
+    var y = true : bool;
+    if (x < 100) {
+        x = x + 1;
+        print(x);
+        print(!y);
+        recurse();
+    } else {
+        var y = -0: int;
+        print(y*z);
+    }
+    print(!!y);
+}
