@@ -1,0 +1,16 @@
+// max and min int stuff
+
+proc main() {
+
+  var M = 9223372036854775807 : int;
+  var m = -M - 1 : int;
+
+  print(M + 1);
+  print(m);
+
+  print(m - 1);
+  print(M);
+
+  print(M + m);
+
+}

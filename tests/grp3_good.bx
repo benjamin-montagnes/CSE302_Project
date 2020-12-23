@@ -1,0 +1,12 @@
+// Contributed: Benjamin Montagnes, Antonin Wattel
+// Date: 2020/10/16
+// Git hash: 156e88c717285912a4aa1bc662602dc1f0c73b87
+
+//test for recursion
+
+proc main() { }
+
+proc fib(n : int) : int {
+  if (n <= 1) { return n; }
+  else { return (fib(n - 1) + fib(n - 2)); }
+}

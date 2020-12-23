@@ -1,0 +1,9 @@
+// multiplication
+
+proc main() {
+  var x = 42, y = 84 : int;
+  print(y * x);
+  print(x * y);
+  var z = x * y : int;
+  print(z);
+}

@@ -1,0 +1,15 @@
+// Contributed: Anya Fries, Amine Abdeljaoued
+// Date: 2020/10/15
+// Git hash: e84bdcf707a19d3b2058e2e4775a6e746c2a7930
+
+// recursion
+// sum of first x numbers
+
+proc sum_x(x: int) : int {
+  if (x == 0){ return 0;}
+  return x + sum_x(x-1);
+}
+
+proc main() {
+  print( sum_x(5) );
+}

@@ -1,0 +1,16 @@
+// while loops
+
+proc main() {
+  var n = 20 : int;
+  while (n > 1) {
+    var i = 1 : int;
+    var sum = 0 : int;
+    while (i < n) {
+      sum = sum + i;
+      i = i + 1;
+    }
+    print(sum);
+    print(n * (n - 1) / 2);
+    n = n - 1;
+  }
+}

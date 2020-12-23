@@ -1,0 +1,20 @@
+// structured jumps (break, continue)
+
+proc main() {
+  var mx = 30 : int;
+  var x = 1 : int;
+  while (true) {
+    print(-x);
+    var y = 0 : int;
+    while (y < mx) {
+      if (x == y) { break; }
+      y = y + 1;
+      if ((x + y) % 3 == 0) { continue; }
+      print(y);
+    }
+    x = x + 1;
+    if (x == mx) {
+      break;
+    }
+  }
+}

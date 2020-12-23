@@ -1,0 +1,19 @@
+// Contributed: Olavi Äikäs, Aya Hankir, Jiahe Zhu
+// Date: 2020/10/15
+// Git hash: 83e1de8ff987d1db966d0e3d07f9a58a9fba21ae
+
+// Recursively compute and print the first 8 fibonacci numbers
+
+proc fib(n : int, m : int, c : int) {
+    if (c > 0) {
+        var new = m + n : int;
+        print(new);
+        fib(m, new, c - 1);
+    }
+}
+
+proc main() {
+    print(1);
+    print(1);
+    fib(1, 1, 6);
+}
