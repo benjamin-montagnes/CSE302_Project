@@ -415,6 +415,7 @@ def ssagen(tacfile):
     # list of gvars and procs
     ssag = ssafile()
     loaded_tac = tacfile
+    print(loaded_tac)
     procs = [tac_proc for tac_proc in loaded_tac if isinstance(tac_proc,Proc)]
     # list: cfg for each proc
     cfgs = [infer(proc) for proc in procs]
@@ -427,12 +428,11 @@ def ssagen(tacfile):
             start = False
             if ssag.nce(cfg)==1: start= True
             if ssag.rename_elim(cfg)==1: start=True
-    # if ln==True:
-        # # linearise back to TAC
-        # for i,proc in enumerate(procs):
-            # linearize(proc,ssa[i])
-        # output_tac = [gvar for gvar in loaded_tac if isinstance(gvar,Gvar)]+procs
-    return ssa
+    # linearise back to TAC
+    for i,proc in enumerate(procs):
+        linearize(proc,ssa[i])
+    output_tac = [gvar for gvar in loaded_tac if isinstance(gvar,Gvar)]+procs
+    return output_tac
 
 # ------------------------------------------------------------------------------
 
@@ -453,12 +453,14 @@ if __name__ == '__main__':
     cx = ast.analyze_program(bx2_prog)
     for tlv in bx2_prog: tlv.type_check(cx)
     tac_prog_bef = process(bx2_prog)
+    # print('or',tac_prog_bef)
     tac_prog = ssagen(tac_prog_bef)
-    # print(tac_prog)
+    # print('af',tac_prog)
     if args.interpret:
         execute(tac_prog, '@main', (), show_proc=(verbosity>0), show_instr=(verbosity>1), only_decimal=(verbosity<=2))
     else:
         tac_file = bx_src.with_suffix('.tac')
         with open(tac_file, 'w') as f:
-            for tlv in tac_prog: print(tlv, file=f)
+            for tlv in tac_prog:
+                print(tlv, file=f)
         print(f'{bx_src} -> {tac_file} done')
