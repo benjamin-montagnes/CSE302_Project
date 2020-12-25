@@ -22,7 +22,11 @@ The optimisations are repeated until no further changes are found/implemented, a
 #### c) Sparse Conditional Constant Propagation (SCCP) (Amine): 
 **explain**
 #### d) Dominator tree of the CFG and Common Subexpression Elimination (CSE) (Anya): 
-**explain**
+We first create a dominator tree of the labels of the CFG. This is the simplest dominator tree to compute and is all that is necessary. This follows 'Algorithm: Compute Dominators' in the project handout. 
+
+From this we compute the available expressions for each instruction. This is stored as a dictionary: `{ str(instr) : set of str(available expressions/instructions) }`. In order for this to be slightly more efficient we have made the following observations: 
+* We only need the instructions with opcodes ('add', 'sub', 'mul', 'div', 'mod', 'neg', 'and', 'or', 'xor', 'not', 'shl', 'shr') when performing CSE so we only store the instructions in the available expressions that have these opcodes. This means less memory is used and we have faster lookup later.
+* In a single block, if we have two instructions `instr1` and `instr2` that follow each other directly, then the available expressions for `instr2` will be those of `instr1` and `instr1` itselfs. This avoids a lot of recomputation.
 
 
 
