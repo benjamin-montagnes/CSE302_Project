@@ -28,5 +28,6 @@ From this we compute the available expressions for each instruction. This is sto
 * We only need the instructions with opcodes ('add', 'sub', 'mul', 'div', 'mod', 'neg', 'and', 'or', 'xor', 'not', 'shl', 'shr') when performing CSE so we only store the instructions in the available expressions that have these opcodes. This means less memory is used and we have faster lookup later.
 * In a single block, if we have two instructions `instr1` and `instr2` that follow each other directly, then the available expressions for `instr2` will be those of `instr1` and `instr1` itselfs. This avoids a lot of recomputation.
 
+Once the available expressions are computed it is a simple task to implement CSE. We iterate over the instructions. If they have an appropriate opcode, using string comparisons, we check if the expression has already been computed in a dominating instruction. If so, we replace the current expression by a copy of the previous destination.
 
 
