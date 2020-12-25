@@ -5,6 +5,7 @@ import tac
 from tac import Instr, Gvar, Proc, execute
 from io import StringIO
 from cfg import infer, linearize
+import cse
 import copy
 import argparse
 
@@ -300,8 +301,6 @@ class ssafile:
                             else: liveout[instr] = livein[succ_instr]
             return liveout
 
-    # ----------------------------------------------------------------------------------
-
     def crude_ssa(self, cfg):
         livein = self.live_in(cfg)
         ### 1.  Add φ-function definitions for all temporaries that are live-in at the start of each block.
@@ -411,28 +410,33 @@ def process(bx2_prog):
                                f'unknown toplevel {tlv.__class__.__name__}')
     return tac_prog
 
+# ------------------------------------------------------------------------------
+
 def ssagen(tacfile):
     # list of gvars and procs
     ssag = ssafile()
     loaded_tac = tacfile
-    print(loaded_tac)
     procs = [tac_proc for tac_proc in loaded_tac if isinstance(tac_proc,Proc)]
     # list: cfg for each proc
     cfgs = [infer(proc) for proc in procs]
     # generate crude ssa
     ssa = [ssag.crude_ssa(cfg) for cfg in cfgs]
     # minimisation steps
+    optimise(ssag,ssa)
+    # linearise back to TAC
+    for i,proc in enumerate(procs):
+        linearize(proc,ssa[i])
+    output_tac = [gvar for gvar in loaded_tac if isinstance(gvar,Gvar)]+procs
+    return output_tac
+
+def optimise(ssag,ssa):
     for cfg in ssa:
         start=True
         while start:
             start = False
             if ssag.nce(cfg)==1: start= True
             if ssag.rename_elim(cfg)==1: start=True
-    # linearise back to TAC
-    for i,proc in enumerate(procs):
-        linearize(proc,ssa[i])
-    output_tac = [gvar for gvar in loaded_tac if isinstance(gvar,Gvar)]+procs
-    return output_tac
+            if cse.run_cse(cfg)==1: start= True
 
 # ------------------------------------------------------------------------------
 
@@ -457,7 +461,9 @@ if __name__ == '__main__':
     tac_prog = ssagen(tac_prog_bef)
     # print('af',tac_prog)
     if args.interpret:
-        execute(tac_prog, '@main', (), show_proc=(verbosity>0), show_instr=(verbosity>1), only_decimal=(verbosity<=2))
+        # to do: this isn't working
+        # Error: 'no value for args in function call'
+        execute(tac_prog, '@main', (), show_proc=(args.verbosity>0), show_instr=(args.verbosity>1), only_decimal=(args.verbosity<=2))
     else:
         tac_file = bx_src.with_suffix('.tac')
         with open(tac_file, 'w') as f:

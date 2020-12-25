@@ -20,11 +20,12 @@ opcode_kinds = {
     'const': 'VIN', 'copy': 'VVN',
     'label': 'NLN',
     'param': 'NIV', 'call': 'VGI', 'ret': 'NVN',
+    'phi': 'VFN',
 }
 opcodes = frozenset(opcode_kinds.keys())
 
 class Instr:
-    __slots__ = ('iid', 'dest', 'opcode', 'arg1', 'arg2')
+    __slots__ = ('dest', 'opcode', 'arg1', 'arg2')
     def __init__(self, dest, opcode, arg1, arg2):
         """Create a new TAC instruction with given `opcode' (must be non-None).
         The other three arguments, `dest', 'arg1', and 'arg2' depend on what
@@ -36,12 +37,6 @@ class Instr:
         self.arg1 = arg1
         self.arg2 = arg2
         self._check()
-
-    def __hash__(self):
-        return hash(id(self))
-
-    def __eq__(self, other):
-        return self is other
 
     @classmethod
     def _isvar(cls, thing):
@@ -336,8 +331,7 @@ class TempMap(dict):
 
     def __getitem__(self, tmp):
         if tmp == dummy_temp:
-            # raise ValueError(f'Cannot read value of {dummy_temp}')
-            return 0
+            raise ValueError(f'Cannot read value of {dummy_temp}')
         if tmp.startswith('@'):
             return self.gvars[tmp].value
         return super().__getitem__(tmp)
@@ -364,8 +358,8 @@ def execute(gvars, procs, proc_name, args, **kwargs):
     values = TempMap(gvars)
     proc = procs[proc_name]
 
-    for i in range(len(proc.t_args)):
-        values[proc.t_args[i]] = args[i]
+    for i, arg in enumerate(args):
+        values[proc.t_args[i]] = arg
 
     proc_desc = f'{proc_name}({",".join(k + "=" + str(v) for k, v in values.items())})'
     if show_proc: print(f'// {indent}entering {proc_desc}')
@@ -426,7 +420,7 @@ def execute(gvars, procs, proc_name, args, **kwargs):
                 else:
                     raise RuntimeError(f'Unknown print() specialization: {instr.arg1}')
             else:
-                if len(params) < instr.arg2:
+                if len(params) != instr.arg2:
                     raise RuntimeError(f'Bad number of arguments to {instr.arg1}(): '
                                        f'expected {instr.arg2}, got {len(params)}')
                 kwargs['depth'] = depth + 1
