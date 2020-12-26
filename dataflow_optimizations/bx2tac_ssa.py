@@ -400,7 +400,7 @@ class ssafile:
                         Val[v]="Bot"
         return Val,Ev
 
-    def sccp(self, cfg): #Takes as input a cfg of a procedure
+    def sccp(self, cfg): #Cases are numbered according to the pdf of the project
         c_jumps = ['jz', 'jnz', 'jl', 'jle']
         Val,Ev = self.get_temps(cfg)
         #For every temp in input, we set Val(v) to top
@@ -453,9 +453,12 @@ class ssafile:
 
                             vals = [Val[i] for i in used_temps]
                             setv = set(vals)
+
+                            #Case 5
                             if len(setv)==1 and list(setv)[0] not in ["Top","Bot"]: 
                                 Val[instr.dest] = val
                             
+                            #Case 3
                             elif len(setv)==2 and "Bot" in setv:
                                 cop = list(setv)
                                 cop.remove("Bot")
@@ -464,41 +467,61 @@ class ssafile:
                                     break
                             
                             else:     
+                                #Keep constant value
+                                constants = []
 
                                 for temp in used_temps:
                                     val = Val[temp]
+
                                     if val not in ["Top","Bot"]:
-                                        pass
-
-                                    if vals.count(val)!=1: 
-                                        Val[instr.dest] = "Top"
-                                        break
-
                                         
+                                        cst.append(temp)
+
+                                        #Case 1
+                                        if len(set(cst))==2:
+                                            Val[instr.dest] = "Top"
+                                            break
+
+                                    #Case 2
                                     if val=="Top":
                                         #We go fetch the block from where it comes from
                                         origin_block = block_labels[used_temps.index(temp)]
                                         if Ev[origin_block]==True: 
                                             Val[instr.dest] = "Top"
                                             break
+                                
+                                #Case 4
+                                for c_temp in cst:
+                                    others = used_temps.remove(c_temp)
+                                    n = len(others)
+                                    k = 0
+                                    for oth in others:
+                                        origin_block = block_labels[used_temps.index(oth)]
+                                        if Ev[origin_block]==True: break
+                                        else: k+=1
+
+                                    if k==n:
+                                        Val[instr.dest] = Val[c_temp]
                             
                         else:
                             if len(used)==2:
-                                if Val[used[0]]=="Top" or Val[used[1]]=="Top":
+                                x = used.pop()
+                                y = used.pop()
+                                if Val[x]=="Top" or Val[y]=="Top":
                                     for temp in self.def_set(instr): 
                                         Val[temp]="Top"
-                                elif (Val[used[0]] not in ["Top","Bot"]) and (Val[used[1]] not in ["Top","Bot"]):
+                                elif (Val[x] not in ["Top","Bot"]) and (Val[y] not in ["Top","Bot"]):
                                     dst = self.def_set(instr)
-                                    if instr.opcode=="add": Val[dst]= Val[used[0]]+Val[used[1]]
-                                    elif instr.opcode=="sub": Val[dst]= Val[used[0]]-Val[used[1]]
-                                    elif instr.opcode=="mul": Val[dst]= Val[used[0]]*Val[used[1]]
-                                    elif instr.opcode=="div": Val[dst]= Val[used[0]]/Val[used[1]]
-                                    elif instr.opcode=="mod": Val[dst]= Val[used[0]]%Val[used[1]]
-                                    elif instr.opcode=="shl": Val[dst]= Val[used[0]]<<Val[used[1]]
-                                    elif instr.opcode=="shr": Val[dst]= Val[used[0]]>>Val[used[1]]
-                                    elif instr.opcode=="and": Val[dst]= Val[used[0]]&Val[used[1]]
-                                    elif instr.opcode=="or": Val[dst]= Val[used[0]]|Val[used[1]]
-                                    elif instr.opcode=="xor": Val[dst]= Val[used[0]]^Val[used[1]]
+                                    if instr.opcode=="add": Val[dst]= Val[x]+Val[y]
+                                    elif instr.opcode=="sub": Val[dst]= Val[x]-Val[y]
+                                    elif instr.opcode=="mul": Val[dst]= Val[x]*Val[y]
+                                    elif instr.opcode=="div": Val[dst]= Val[x]/Val[y]
+                                    elif instr.opcode=="mod": Val[dst]= Val[x]%Val[y]
+                                    elif instr.opcode=="shl": Val[dst]= Val[x]<<Val[y]
+                                    elif instr.opcode=="shr": Val[dst]= Val[x]>>Val[y]
+                                    elif instr.opcode=="and": Val[dst]= Val[x]&Val[y]
+                                    elif instr.opcode=="or": Val[dst]= Val[x]|Val[y]
+                                    elif instr.opcode=="xor": Val[dst]= Val[x]^Val[y]
 
                                 
 
@@ -547,7 +570,7 @@ def ssagen(tacfile):
 def optimise(ssag,ssa):
     for cfg in ssa:
         start=True
-        #ssag.sccp(cfg)
+        ssag.sccp(cfg)
         while start:
             start = False
             if ssag.nce(cfg)==1: start= True
