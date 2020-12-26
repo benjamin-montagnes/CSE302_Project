@@ -7,6 +7,23 @@ Control Flow Graphs (CFG)
 import tac
 from io import StringIO
 
+    # def dead_copy_elim(self):
+    #     for i in range(len(self.instrs)):
+    #         if self.instrs[i].opcode != 'copy': continue    # check opcode is copy
+    #         curr = self.instrs[i].dest
+    #         used = False
+            
+    #         for j in range(i+1, len(self.instrs)):      # loop over following instructions
+    #             if self.instrs[j].arg1 == curr or self.instrs[j].arg2 == curr:  # the temp is used
+    #                 used = True
+    #                 break
+    #             elif self.instrs[j].dest == curr:                               # can be removed as reassigned before used
+    #                 self.instrs[i] = Instr(None,'nop', None, None)
+    #         if not used:                                                        # not ever mentioned again, remove (nop)
+    #             self.instrs[i] = Instr(None,'nop', None, None)
+        
+    #     self.instrs = list(filter((lambda x: x.opcode != 'nop'), self.instrs))
+
 # ------------------------------------------------------------------------------
 
 class Block:
@@ -62,6 +79,24 @@ class Block:
         self.display(file=s)
         return s.getvalue()
     
+    def copy_propagate(self):
+        # simple copy propagation inside a block
+        instrs = list(self.instrs())
+        for i in range(len(instrs)):
+            if instrs[i].opcode != 'copy': continue
+            t_old = instrs[i].arg1
+            t_new = instrs[i].dest
+            for j in range(i+1, len(instrs)):
+                if instrs[j].arg1 == t_new:
+                    instrs[j].arg1 = t_old
+                if instrs[j].arg2 == t_new:
+                    instrs[j].arg2 = t_old
+                if instrs[j].dest in (t_old, t_new):
+                    break
+        self.body  = instrs[:len(self.body)]
+        self.jumps = instrs[len(self.body):]
+
+
     
 
 # ------------------------------------------------------------------------------
