@@ -389,6 +389,121 @@ class ssafile:
                                         change = 1
         return change
 
+    def get_temps(self,cfg):
+        Val,Ev = {},{}
+        for block in cfg._blockmap.values():
+            if block.label not in Ev:
+                Ev[block.label]=False
+            for instr in block.body:
+                for v in [instr.dest,instr.arg1,instr.arg2]:
+                    if (type(v)==str and v[0]=="%") and v not in Val:
+                        Val[v]="Bot"
+        return Val,Ev
+
+    def sccp(self, cfg): #Takes as input a cfg of a procedure
+        c_jumps = ['jz', 'jnz', 'jl', 'jle']
+        Val,Ev = self.get_temps(cfg)
+        #For every temp in input, we set Val(v) to top
+        for temp in cfg.t_args:
+            Val[temp]="Top"
+
+        #For the initial block, we set Ev(B)=True
+        Ev[list(cfg._blockmap.keys())[0]]=True
+
+        print(Ev)
+        #Visiting blocks and updating Ev
+        order = list(cfg._blockmap.keys())
+        random.shuffle(order)
+        for b in order:
+            definite = False #Presence of a definite jump ()
+            if Ev[b]==True:
+                for instr in cfg._blockmap[b].body:
+                    if instr.opcode in c_jumps:
+                        jmp_dst = instr.arg2 #Check if it is indeed arg2
+                        used = self.use_set(instr)
+                        if len(used)==1:
+                            if Val[used]=="Top":
+                                Ev[jmp_dst]=True
+                            elif Val[used]=="Bot":
+                            #stop further updates based on this and later jumps in B
+                                break
+                            else:
+                            #check conditions, is the jump definite only when condition is satisfied?
+                                x = Val[used]
+                                if instr.opcode=="jz":
+                                    if x==0: 
+                                        Ev[jmp_dst],definite=True,True
+                                if instr.opcode == "jnz":
+                                    if x!=0: Ev[jmp_dst],definite=True,True
+                                if instr.opcode == "jl":
+                                    if x<0: Ev[jmp_dst],definite=True,True
+                                if instr.opcode == "jle":
+                                    if x<=0: Ev[jmp_dst],definite=True,True
+
+
+                    elif instr.opcode=="jmp":
+                        if definite==False:
+                            Ev[instr.arg1]=True
+        
+                    else:
+                        used = self.use_set(instr)
+                        if instr.opcode=="phi":
+                            used_temps = list(instr.arg1.values())
+                            block_labels = list(instr.arg1.keys())
+
+                            vals = [Val[i] for i in used_temps]
+                            setv = set(vals)
+                            if len(setv)==1 and list(setv)[0] not in ["Top","Bot"]: 
+                                Val[instr.dest] = val
+                            
+                            elif len(setv)==2 and "Bot" in setv:
+                                cop = list(setv)
+                                cop.remove("Bot")
+                                if cop[0] not in ["Top","Bot"]:
+                                    Val[instr.dest] = val
+                                    break
+                            
+                            else:     
+
+                                for temp in used_temps:
+                                    val = Val[temp]
+                                    if val not in ["Top","Bot"]:
+                                        pass
+
+                                    if vals.count(val)!=1: 
+                                        Val[instr.dest] = "Top"
+                                        break
+
+                                        
+                                    if val=="Top":
+                                        #We go fetch the block from where it comes from
+                                        origin_block = block_labels[used_temps.index(temp)]
+                                        if Ev[origin_block]==True: 
+                                            Val[instr.dest] = "Top"
+                                            break
+                            
+                        else:
+                            if len(used)==2:
+                                if Val[used[0]]=="Top" or Val[used[1]]=="Top":
+                                    for temp in self.def_set(instr): 
+                                        Val[temp]="Top"
+                                elif (Val[used[0]] not in ["Top","Bot"]) and (Val[used[1]] not in ["Top","Bot"]):
+                                    dst = self.def_set(instr)
+                                    if instr.opcode=="add": Val[dst]= Val[used[0]]+Val[used[1]]
+                                    elif instr.opcode=="sub": Val[dst]= Val[used[0]]-Val[used[1]]
+                                    elif instr.opcode=="mul": Val[dst]= Val[used[0]]*Val[used[1]]
+                                    elif instr.opcode=="div": Val[dst]= Val[used[0]]/Val[used[1]]
+                                    elif instr.opcode=="mod": Val[dst]= Val[used[0]]%Val[used[1]]
+                                    elif instr.opcode=="shl": Val[dst]= Val[used[0]]<<Val[used[1]]
+                                    elif instr.opcode=="shr": Val[dst]= Val[used[0]]>>Val[used[1]]
+                                    elif instr.opcode=="and": Val[dst]= Val[used[0]]&Val[used[1]]
+                                    elif instr.opcode=="or": Val[dst]= Val[used[0]]|Val[used[1]]
+                                    elif instr.opcode=="xor": Val[dst]= Val[used[0]]^Val[used[1]]
+
+                                
+
+                            
+
 # ------------------------------------------------------------------------------
 
 def process(bx2_prog):
@@ -432,6 +547,7 @@ def ssagen(tacfile):
 def optimise(ssag,ssa):
     for cfg in ssa:
         start=True
+        #ssag.sccp(cfg)
         while start:
             start = False
             if ssag.nce(cfg)==1: start= True
@@ -459,14 +575,16 @@ if __name__ == '__main__':
     tac_prog_bef = process(bx2_prog)
     # print('or',tac_prog_bef)
     tac_prog = ssagen(tac_prog_bef)
-    # print('af',tac_prog)
-    if args.interpret:
+    
+    
+    """     if args.interpret:
         # to do: this isn't working
         # Error: 'no value for args in function call'
         execute(tac_prog, '@main', (), show_proc=(args.verbosity>0), show_instr=(args.verbosity>1), only_decimal=(args.verbosity<=2))
-    else:
-        tac_file = bx_src.with_suffix('.tac')
-        with open(tac_file, 'w') as f:
-            for tlv in tac_prog:
-                print(tlv, file=f)
-        print(f'{bx_src} -> {tac_file} done')
+    else: """
+
+    tac_file = bx_src.with_suffix('.tac')
+    with open(tac_file, 'w') as f:
+        for tlv in tac_prog:
+            print(tlv, file=f)
+    print(f'{bx_src} -> {tac_file} done') 
