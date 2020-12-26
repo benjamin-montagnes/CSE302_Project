@@ -8,6 +8,7 @@ from cfg import infer, linearize
 import cse
 import copy
 import argparse
+import random
 
 binop_opcode_map = {'+': 'add', '-': 'sub', '*': 'mul', '/': 'div', '%': 'mod',
                     '&': 'and', '|': 'or', '^': 'xor', '<<': 'shl', '>>': 'shr'}
@@ -573,9 +574,10 @@ def optimise(ssag,ssa):
         ssag.sccp(cfg)
         while start:
             start = False
-            if ssag.nce(cfg)==1: start= True
-            if ssag.rename_elim(cfg)==1: start=True
-            if cse.run_cse(cfg)==1: start= True
+            if ssag.nce(cfg)==1:            start = True
+            if ssag.rename_elim(cfg)==1:    start = True
+            if cse.run_cse(cfg)==1:         start = True
+            if cfg.copy_propagate()==1:     start = True
 
 # ------------------------------------------------------------------------------
 

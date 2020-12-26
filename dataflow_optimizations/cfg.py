@@ -172,7 +172,7 @@ class CFG:
         self._blockmap[block.label] = block
         self._fwd[block.label] = set()
         self._bwd[block.label] = set()
-        for jinstr in bl.jumps:
+        for jinstr in block.jumps:
             dest = get_jump_dest(jinstr)
             if dest: self.add_edge(block.label, dest)
 
@@ -217,6 +217,11 @@ class CFG:
                 for lab_to in lab_tos:
                     print(f'{lab_from[1:]} -> {lab_to[1:]};', file=f)
             print('}', file=f)
+
+    def copy_propagate(self):
+        for block in self._blockmap.values():
+            block.copy_propagate()
+
 
 # ------------------------------------------------------------------------------
 
