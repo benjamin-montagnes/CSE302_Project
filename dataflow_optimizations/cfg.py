@@ -337,6 +337,48 @@ def linearize(tac_proc, cfg):
 
 # ------------------------------------------------------------------------------
 
+def filter_liveset(lab, lset):
+    for x in lset:
+        if isinstance(x, tuple):
+            if x[0] == lab: yield x[1]
+        else: yield x
+
+def recompute_liveness(cfg, livein, liveout):
+    """Perform liveness analysis on the given cfg, storing the results in `livein' and `liveout'.
+    Note: both `livein' and `liveout' are cleaned out before computing liveness. (they are dictionaries)
+    Mapping from tac.Instr to set of temporaries."""
+    livein.clear()
+    liveout.clear()
+    # initialize livein with the use sets
+    for i in cfg.instrs():
+        livein[i] = set(i.uses())
+        liveout[i] = set()
+    dirty = True
+    def update_livein(i, j_livein):
+        nonlocal dirty
+        old_count = len(livein[i])
+        old_set = str(livein[i])
+        i_defs = set(i.defs())
+        for x in j_livein:
+            if ((isinstance(x, tuple) and x[1] in i_defs) or \
+                x in i_defs): continue
+            livein[i].add(x)
+        if old_count != len(livein[i]):
+            dirty = True
+    while dirty:
+        dirty = False
+        for (li, i, lj, j) in cfg.instr_pairs(labeled=True):
+            if li == lj: update_livein(i, livein[j])
+            else: update_livein(i, filter_liveset(li, livein[j]))
+    for li, i, lj, j in cfg.instr_pairs(labeled=True):
+        liveout[i].update(filter_liveset(li, livein[j]))
+    # fix the livein sets to remove tuples
+    for i, li in livein.items():
+        livein[i] = {x[1] if isinstance(x, tuple) else x \
+                     for x in li}
+
+# ------------------------------------------------------------------------------
+
 if __name__ == '__main__':
     import logging
     import os
