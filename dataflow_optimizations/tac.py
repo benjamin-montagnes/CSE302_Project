@@ -25,7 +25,7 @@ opcode_kinds = {
 opcodes = frozenset(opcode_kinds.keys())
 
 class Instr:
-    __slots__ = ('dest', 'opcode', 'arg1', 'arg2')
+    __slots__ = ('iid', 'dest', 'opcode', 'arg1', 'arg2')
     def __init__(self, dest, opcode, arg1, arg2):
         """Create a new TAC instruction with given `opcode' (must be non-None).
         The other three arguments, `dest', 'arg1', and 'arg2' depend on what
@@ -37,6 +37,12 @@ class Instr:
         self.arg1 = arg1
         self.arg2 = arg2
         self._check()
+
+    def __hash__(self):
+        return hash(id(self))
+
+    def __eq__(self, other):
+        return self is other
 
     @classmethod
     def _isvar(cls, thing):
@@ -59,12 +65,18 @@ class Instr:
                not thing.startswith('.L')
 
     @classmethod
+    def _isphiargs(cls, thing):
+        return (isinstance(thing, dict) and \
+                all(cls._isvar(x) for x in thing.values()))
+
+    @classmethod
     def _isvalid(cls, thing, k):
         if k == 'N': return thing == None
         if k == 'I': return cls._isint(thing)
         if k == 'V': return cls._isvar(thing)
         if k == 'L': return cls._islabel(thing)
         if k == 'G': return cls._isglobal(thing)
+        if k == 'F': return cls._isphiargs(thing)
         return ValueError(f'Unknown argument kind: {k}')
 
     def _check(self):
@@ -97,6 +109,10 @@ class Instr:
         result = StringIO()
         if self.opcode == 'label':
             result.write(f'{self.arg1}:')
+        elif self.opcode == 'phi':
+            result.write(f'  {self.dest} = phi(')
+            result.write(', '.join(f'{lab}:{tmp}' for lab, tmp in self.arg1.items()))
+            result.write(');')
         else:
             result.write('  ')
             if self.dest != None:
@@ -108,6 +124,42 @@ class Instr:
                     result.write(f', {self.arg2}')
             result.write(';')
         return result.getvalue()
+
+    @classmethod
+    def _istemp(cls, thing):
+        return (isinstance(thing, str) and \
+                len(thing) > 1 and \
+                thing[0] == '%' and \
+                thing[1] != '_')
+
+    def defs(self):
+        """Returns an iterator over the temporaries defined in this instruction"""
+        if self._istemp(self.dest): yield self.dest
+
+    def uses(self):
+        """Returns an iterator over the temporaries used in this instruction.
+        Each item of the terator is either a temporary by itself or a
+        2-tuple of the form (label, temporary) that corresponds to an
+        argument of a phi-function."""
+        if self._istemp(self.arg1): yield self.arg1
+        if self._istemp(self.arg2): yield self.arg2
+        if self.opcode == 'phi':
+            for l, t in self.arg1.items():
+                if self._istemp(t): yield (l, t)
+
+    def rewrite_temps(self, rew):
+        """Apply `rew' to rewrite the temps in this instruction. If `rew' is a
+        dictionary, then it will be used to look up the new mapping of
+        a temporary (if one exists), defaulting to no change if there
+        is no mapping. If `rew' is a function, then every temporary t will
+        be mapped to `rew(t)'."""
+        if isinstance(rew, dict): lookup = lambda t: rew.get(t, t)
+        else: lookup = rew
+        if self._istemp(self.dest): self.dest = lookup(self.dest)
+        if self._istemp(self.arg1): self.arg1 = lookup(self.arg1)
+        if self._istemp(self.arg2): self.arg2 = lookup(self.arg2)
+        if self.opcode == 'phi':
+            for l, t in self.arg1.items(): self.arg1[l] = lookup(t)
 
 class Proc:
     def __init__(self, name, t_args, body):
@@ -139,7 +191,7 @@ tokens = (
     'LABEL',                    # label
     'GLABEL',                   # global label
     'EQ', 'COMMA', 'SEMICOLON', 'COLON', 'LPAREN', 'RPAREN',
-    'VAR', 'PROC',
+    'VAR', 'PROC', 'PHI',
 )
 
 dummy_temp = '%_'
@@ -149,7 +201,7 @@ def __create_lexer():
 
     t_ignore = ' \t\f\v\r'
 
-    t_TEMP = r'%(_|0|[1-9][0-9]*|[A-Za-z][A-Za-z0-9_]*)'
+    t_TEMP = r'%(_|0|[1-9][0-9]*|[A-Za-z][A-Za-z0-9_]*)(\.[0-9]+)?'
     t_EQ = r'='
     t_COMMA = r','
     t_SEMICOLON = r';'
@@ -168,6 +220,7 @@ def __create_lexer():
         r'[A-Za-z_][A-Za-z0-9_]*'
         if t.value == 'var': t.type = 'VAR'
         elif t.value == 'proc': t.type = 'PROC'
+        elif t.value == 'phi': t.type = 'PHI'
         elif t.value not in opcodes:
             print_at(t, f'Error: unknown opcode {t.value}')
             raise SyntaxError(f'badop')
@@ -238,10 +291,30 @@ def __create_parser():
         opcode = p[2]
         arg1, arg2 = p[3]
         p[0] = Instr(lhs, opcode, arg1, arg2)
-        # try:
-        #     p[0] = Instr(lhs, opcode, arg1, arg2)
-        # except ValueError as exn:
-        #     raise SyntaxError(exn.args[0])
+
+    def p_phidef(p):
+        '''instr : TEMP EQ PHI LPAREN phiargs RPAREN SEMICOLON'''
+        phiargs = {l: t for l, t in p[5]}
+        p[0] = Instr(p[1], 'phi', phiargs, None)
+
+    def p_phiargs(p):
+        '''phiargs : phiargs1
+                   | '''
+        p[0] = [] if len(p) == 1 else p[1]
+
+    def p_phiargs1(p):
+        '''phiargs1 : phiargs1 COMMA phiarg
+                    | phiarg'''
+        if len(p) == 2:
+            p[0] = [p[1]]
+        else:
+            p[0] = p[1]
+            p[1].append(p[3])
+
+    def p_phiarg(p):
+        '''phiarg : LABEL COLON TEMP
+                  | GLABEL COLON TEMP'''
+        p[0] = (p[1], p[3])
 
     def p_label(p):
         '''instr : LABEL COLON'''
@@ -331,10 +404,17 @@ class TempMap(dict):
 
     def __getitem__(self, tmp):
         if tmp == dummy_temp:
-            raise ValueError(f'Cannot read value of {dummy_temp}')
+            # raise ValueError(f'Cannot read value of {dummy_temp}')
+            return 0
         if tmp.startswith('@'):
             return self.gvars[tmp].value
         return super().__getitem__(tmp)
+
+    def copy(self):
+        tm = TempMap(self.gvars.copy())
+        for k, v in super().items():
+            tm[k] = v
+        return tm
 
     def __setitem__(self, tmp, val):
         assert self._valid_temp(tmp)
@@ -348,7 +428,8 @@ class TempMap(dict):
             else:
                 super().__setitem__(tmp, val)
 
-def execute(gvars, procs, proc_name, args, **kwargs):
+def execute(tac_prog, proc_name, args, **kwargs):
+    gvars, procs = tac_prog
     show_proc = kwargs.get('show_proc', False)
     show_instr = kwargs.get('show_instr', False)
     only_decimal = kwargs.get('only_decimal', True)
@@ -358,8 +439,10 @@ def execute(gvars, procs, proc_name, args, **kwargs):
     values = TempMap(gvars)
     proc = procs[proc_name]
 
-    for i, arg in enumerate(args):
-        values[proc.t_args[i]] = arg
+    for i in range(len(proc.t_args)):
+        values[proc.t_args[i]] = args[i]
+
+    oldvalues = values.copy()
 
     proc_desc = f'{proc_name}({",".join(k + "=" + str(v) for k, v in values.items())})'
     if show_proc: print(f'// {indent}entering {proc_desc}')
@@ -369,34 +452,54 @@ def execute(gvars, procs, proc_name, args, **kwargs):
         if instr.opcode != 'label': continue
         if instr.arg1 in labels:
             raise RuntimeError(f'Reused label {instr.arg1}')
-        labels[instr.arg1] = i + 1 # spot right after the label
+        ni = i + 1 # next instruction index
+        while ni < len(proc.body):
+            if proc.body[ni].opcode != 'label': break
+            ni += 1
+        labels[instr.arg1] = ni
 
+    lab_prev, lab_cur = None, proc_name
     pc = 0
     params = []
     while pc in range(len(proc.body)):
         instr = proc.body[pc]
+        pc += 1
 
         if show_instr: print(f'// {indent}[{pc+1: 4d}] {instr}')
-        if instr.opcode == 'nop' or instr.opcode == 'label':
-            pc += 1
+        if instr.opcode == 'nop':
+            pass
+        elif instr.opcode == 'label':
+            lab_prev, lab_cur = lab_cur, instr.arg1
+        elif instr.opcode == 'phi':
+            for lab, tmp in instr.arg1.items():
+                if lab == lab_prev:
+                    values[instr.dest] = oldvalues[tmp]
+                    break
+            else:
+                raise RuntimeError(f'cannot resolve phi: '
+                                   f'came from {lab_prev}, '
+                                   f'can only handle [{",".join(instr.arg1.keys())}]')
         elif instr.opcode == 'jmp':
             if instr.arg1 not in labels:
                 raise RuntimeError(f'Unknown jump destination {instr.arg1}')
-            pc = labels[instr.arg1]
+            lab_prev, lab_cur = lab_cur, instr.arg1
+            oldvalues = values.copy()
+            pc = labels[lab_cur]
         elif instr.opcode in jumps:
             k = values[instr.arg1]
             if instr.arg2 not in labels:
                 raise RuntimeError(f'Unknown jump destination {instr.arg2}')
-            pc = labels[instr.arg2] if jumps[instr.opcode](k) else pc + 1
+            if jumps[instr.opcode](k):
+                lab_prev, lab_cur = lab_cur, instr.arg2
+                oldvalues = values.copy()
+                pc = labels[lab_cur]
         elif instr.opcode == 'const':
             if not isinstance(instr.arg1, int):
                 print(f'Missing or bad argument: {instr.arg1}')
                 raise RuntimeError
             values[instr.dest] = twoc(instr.arg1)
-            pc += 1
         elif instr.opcode == 'copy':
             values[instr.dest] = values[instr.arg1]
-            pc += 1
         elif instr.opcode == 'param':
             if not isinstance(instr.arg1, int) or instr.arg1 < 1:
                 print(f'Bad argument to param: '
@@ -405,7 +508,6 @@ def execute(gvars, procs, proc_name, args, **kwargs):
             for _ in range(instr.arg1 - len(params)):
                 params.append(None)
             params[instr.arg1 - 1] = values[instr.arg2]
-            pc += 1
         elif instr.opcode == 'call':
             if instr.arg1.startswith('@__bx_print'):
                 if len(params) != 1:
@@ -420,13 +522,12 @@ def execute(gvars, procs, proc_name, args, **kwargs):
                 else:
                     raise RuntimeError(f'Unknown print() specialization: {instr.arg1}')
             else:
-                if len(params) != instr.arg2:
+                if len(params) < instr.arg2:
                     raise RuntimeError(f'Bad number of arguments to {instr.arg1}(): '
                                        f'expected {instr.arg2}, got {len(params)}')
                 kwargs['depth'] = depth + 1
-                values[instr.dest] = execute(gvars, procs, instr.arg1, params, **kwargs)
+                values[instr.dest] = execute(tac_prog, instr.arg1, params, **kwargs)
             params = []
-            pc += 1
         elif instr.opcode == 'ret':
             retval = None if instr.arg1 == dummy_temp else values[instr.arg1]
             if show_proc:
@@ -436,14 +537,12 @@ def execute(gvars, procs, proc_name, args, **kwargs):
             u = values[instr.arg1]
             v = values[instr.arg2]
             values[instr.dest] = binops[instr.opcode](u, v)
-            pc += 1
         elif instr.opcode in unops:
             u = values[instr.arg1]
             if instr.arg2 != None:
                 print(f'Unary operator {self.opcode} has two arguments!')
                 raise RuntimeError
             values[instr.dest] = unops[instr.opcode](u)
-            pc += 1
         else:
             print(f'Unknown opcode {instr.opcode}')
             raise RuntimeError
@@ -486,8 +585,9 @@ if __name__ == '__main__':
             seen.add(tlv.name)
             if isinstance(tlv, Proc): procs[tlv.name] = tlv
             else: gvars[tlv.name] = tlv
+        tac_prog = (gvars, procs)
         if args.execute:
-            execute(gvars, procs, '@main', (), **kwargs)
+            execute(tac_prog, '@main', (), **kwargs)
         elif args.verbosity > 0:
             for gvar in gvars.values(): print(gvar)
             for proc in procs.values(): print(proc)

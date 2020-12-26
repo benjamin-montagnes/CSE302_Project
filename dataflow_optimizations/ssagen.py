@@ -1,192 +1,365 @@
-from tac import load_tac, Proc, Gvar, Instr
-from cfg import infer, linearize
-import argparse
-import copy
+#!/usr/bin/env python3
 
-# ----------------------------------------------------------------------------------
+import tac
+from cfg import infer, linearize
+import cse
+import copy
+import cfg as tac_cfg
+import re, random, os
+
+# ------------------------------------------------------------------------------
+# liveness
+
+_arg1_use = re.compile(r'add|sub|mul|div|mod|neg|and|or|xor|not|shl|shr|copy|ret|jz|jnz|jl|jle')
+_arg2_use = re.compile(r'add|sub|mul|div|mod|and|or|xor|shl|shr|param')
+_dest_def = re.compile(r'add|sub|mul|div|mod|neg|and|or|xor|not|shl|shr|const|copy|phi|call')
 
 def use_set(instr):
-    # to do:
-    # what to do with opcode phi
-    if instr.opcode in ['jz', 'jnz', 'jl', 'jle', 'neg', 'not', 'copy','ret']:
-        return set([instr.arg1]).difference({"%_"})
-    elif instr.opcode in ['param']:
-        return set([instr.arg2]).difference({"%_"})
-    elif instr.opcode in ['add','sub','mul','div','mod','and','or','xor','shl','shr']:
-        return set([instr.arg1,instr.arg2]).difference({"%_"})
-    else: return set()
-    # label, jmp, nop, const, call -> nothing used
+    s = set()
+    if _arg1_use.fullmatch(instr.opcode): s.add(instr.arg1)
+    if _arg2_use.fullmatch(instr.opcode): s.add(instr.arg2)
+    if instr.opcode == 'phi': s.update(instr.arg1.values())
+    return s
+
+def rewrite_use_temps_nonphi(instr, fn):
+    if _arg1_use.fullmatch(instr.opcode):
+        instr.arg1 = fn(instr.arg1)
+    if _arg2_use.fullmatch(instr.opcode):
+        instr.arg2 = fn(instr.arg2)
 
 def def_set(instr):
-    if instr.opcode in ['neg', 'not', 'copy','add','phi',
-                        'sub','mul','div','mod','and','or',
-                        'xor','shl','shr','call','const']:
-        return set([instr.dest])
-    else: return set()
-     # param, label, jmp, nop, 'jz', 'jnz', 'jl', 'jle','ret', -> nothing defined
+    s = set()
+    if _dest_def.fullmatch(instr.opcode): s.add(instr.dest)
+    return s
 
-def live_in(cfg):
-    livein = dict()
-    for instr in cfg.instrs():
-        livein[instr] = use_set(instr)
-    # run the livein set update loop until there are no more changes
+def rewrite_temps(instr, fn):
+    if _arg1_use.fullmatch(instr.opcode):
+        instr.arg1 = fn(instr.arg1)
+    if _arg2_use.fullmatch(instr.opcode):
+        instr.arg2 = fn(instr.arg2)
+    if instr.opcode == 'phi':
+        for l, t in instr.arg1.items():
+            instr.arg1[l] = fn(t)
+    if _dest_def.fullmatch(instr.opcode):
+        instr.dest = fn(instr.dest)
+
+# ------------------------------------------------------------------------------
+# crude SSA gen
+
+def tmp_root(tmp):
+    try: return tmp[:tmp.rindex('.')]
+    except ValueError: return tmp
+
+def tmp_version(tmp):
+    try: return tmp[tmp.rindex('.')+1:]
+    except ValueError: return ''
+
+def crude_ssagen(tlv, cfg):
+    livein, liveout = dict(), dict()
+    tac_cfg.recompute_liveness(cfg, livein, liveout)
+    for bl in cfg.nodes():
+        prev_labs = list(cfg.predecessors(bl.label))
+        ts = livein[bl.first_instr()]
+        if len(prev_labs) == 0: prev_labs = [cfg.proc_name]
+        bl.body[:0] = [tac.Instr(t, 'phi', {l: t for l in prev_labs}, None) \
+                       for t in ts]
+    versions = tac_cfg.counter(transfn=lambda x: f'.{x}')
+    for i in cfg.instrs():
+        if i.dest: i.dest = i.dest + next(versions)
+    ver_maps = {cfg.proc_name: {t: t for t in tlv.t_args}}
+    for bl in cfg.nodes():
+        ver_map = dict()
+        for instr in bl.instrs():
+            rewrite_use_temps_nonphi(instr, lambda t: ver_map.get(t, t))
+            if instr.dest:
+                ver_map[tmp_root(instr.dest)] = instr.dest
+        ver_maps[bl.label] = ver_map
+    for bl in cfg.nodes():
+        for instr in bl.instrs():
+            if instr.opcode != 'phi': continue
+            for lab_prev, root in instr.arg1.items():
+                instr.arg1[lab_prev] = ver_maps[lab_prev].get(root, root)
+
+class ufset:
+    def __init__(self):
+        self._parents = dict()
+
+    def __call__(self, x):
+        if x not in self._parents: return x
+        p = self(self._parents[x])
+        self._parents[x] = p    # path compression
+        return p
+
+    def union(self, x, y):
+        px = self(x)
+        py = self(y)
+        self._parents[px] = py
+
+def ssa_minimize(tlv, cfg):
+    teq = ufset()
     dirty = True
+    change = False
     while dirty:
         dirty = False
-        for (i1, i2) in cfg.instr_pairs():
-            t_live = livein[i2].difference(def_set(i1))
-            if not t_live.issubset(livein[i1]):
-                dirty = True # there was a change, so run it again
-                livein[i1] = livein[i1].union(t_live)
-    return livein
-
-def live_out(cfg,livein):
-        liveout = dict()
-        for block in cfg._blockmap.values():
-            for i,instr in enumerate(block.instrs()):
-                block_instrs =list(block.instrs())
-                for j in range(i+1,len(block_instrs)):
-                    if instr in liveout.keys(): liveout[instr] = (livein[block_instrs[j]]).union(liveout[instr])
-                    else: liveout[instr] = livein[block_instrs[j]]
-                for succ_block in [cfg[label] for label in cfg.successors(block.label)]:
-                    for succ_instr in succ_block.instrs():
-                        if instr in liveout.keys(): liveout[instr] = (livein[succ_instr]).union(liveout[instr])
-                        else: liveout[instr] = livein[succ_instr]
-        return liveout
-
-# ----------------------------------------------------------------------------------
-
-def crude_ssa(cfg):
-    livein = live_in(cfg)
-    ### 1.  Add φ-function definitions for all temporaries that are live-in at the start of each block.
-    for block in cfg._blockmap.values():
-        instrs = block.body+block.jumps
-        if instrs != []: live_vars = livein[instrs[0]]  # get livein of first instruction in block
-        for live_var in live_vars:                      # loop of variables in this livein
-            phi_instr = Instr(live_var, 'phi', dict(), None)    # add a phony "phi" def: mapping will be implemented later
-            block.body.insert(0,phi_instr)                      # add to block
-    ### 2.  Uniquely version every temporary that is def’d by any instruction in the entire CFG.
-    i = 0
-    for instr in cfg.instrs():
-        if instr.opcode in ['neg', 'not', 'copy','add','phi',   # these opcodes mean we are defining something
-                            'sub','mul','div','mod','and','or',
-                            'xor','shl','shr','call','const']:
-            if instr.dest != "%_": instr.dest +='.'+str(i)
-            i += 1
-    ### 3.  Update the uses of each temporary within the same block to their most recent versions.
-    for block in cfg._blockmap.values():
-        instrs = block.body+block.jumps
-        for i,instr in enumerate(instrs):
-            for var in use_set(instr):  # for each var used in the instruction
-                for instr1 in instrs[:i]:
-                    if def_set(instr1) != set():
-                        defed = def_set(instr1).pop() # we only ever have one variable defined anyways
-                        if defed.split('.')[0] == var:
-                            if instr.arg1 == var: instr.arg1 = defed
-                            elif instr.arg2 == var: instr.arg2 = defed
-    ### 4.  For every edge in the CFG (use the .edges() iterator) fill in the arguments of the φ functions.
-            # i.e. of the form L1:%n for every temporary %n that comes to .L2 from .L1.
-    # use predecessor blocks to fill args of phi func
-    for L1,L2 in cfg.edges():
-        for curr_instr in cfg._blockmap[L2].instrs():
-            if not curr_instr.opcode == 'phi': continue  # don't do anything if not phi instruction
-            # set instr.arg1['.Label1'] = last definition of temp with the same root 
-            for prev_instr in cfg._blockmap[L1].instrs():
-                if def_set(prev_instr): 
-                    defed = def_set(prev_instr).pop() # we only ever have one variable defined anyways
-                    if defed.split('.')[0] == curr_instr.dest.split('.')[0]:
-                        curr_instr.arg1[L1] = defed
-    # in entry block we also get the args of the phi func from the args of the proc
-    for instr in cfg._blockmap[cfg.lab_entry].instrs():
-        if not instr.opcode == 'phi': continue
-        instr.arg1[cfg.proc_name] = instr.dest.split('.')[0]
-    return cfg
-
-def nce(cfg):
-    '''Null choice elimination'''
-    change = 0
-    for block in cfg._blockmap.values():
-        for instr in block.body:
-            if instr.opcode == "phi":
-                args = set(instr.arg1.values())
-                if len(args)==1 and args.pop()==instr.dest:
-                    block.body.remove(instr)
-                    change = 1
-
-def rename_elim(cfg):
-    change = 0
-    for block in cfg._blockmap.values():
-        for instr in block.body:
-            if instr.opcode == "phi":
-                args = set(instr.arg1.values())
-                old = instr.dest
-                if old in args:
-                    args.remove(old)
-                if len(args)==1:
-                    renamed = args.pop()
-                    if old.split('.')[0] == renamed.split('.')[0]: #Check if same root
-                        #Replace all instructions in block
-                        for blk in cfg._blockmap.values():
-                            for ins in blk.body+block.jumps:
-                                if ins.dest == old: 
-                                    ins.dest = renamed
-                                    change = 1
-                                if isinstance(ins.arg1,dict):
-                                    for k in ins.arg1:
-                                        if ins.arg1[k] ==old: 
-                                            ins.arg1[k]=renamed
-                                            change = 1
-                                else:
-                                    if ins.arg1==old: 
-                                        ins.arg1=renamed
-                                        change = 1
-                                
-                                if ins.arg2 == old: 
-                                    ins.arg2 = renamed
-                                    change = 1
+        for instr in cfg.instrs():
+            if instr.opcode != 'phi': continue
+            lhs = teq(instr.dest)
+            rhs = set(teq(t) for t in instr.arg1.values())
+            # null choice
+            if len(rhs) == 1 and lhs in rhs:
+                dirty = True
+                change = True
+                instr.dest, instr.arg1 = None, None
+                instr.opcode = 'nop'
+            # rename
+            if len(rhs.union({lhs})) == 2:
+                dirty = True
+                change = True
+                if lhs in rhs: rhs.remove(lhs)
+                teq.union(lhs, rhs.pop())
+    tlv.t_args = tuple(teq(t) for t in tlv.t_args)
+    for bl in cfg.nodes():
+        bl.body = list(filter(lambda instr: instr.opcode != 'nop', bl.body))
+    for instr in cfg.instrs(): rewrite_temps(instr, teq)
     return change
 
-# ----------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 
-# 1. Reads in a TAC file, computes its CFG, and then performs liveness analysis
-# 2. Uses the live sets information to do crude SSA generation
-# 3. Performs all the SSA minimization steps until no further minimizations can be done
-# 4. Then linearizes the SSA CFG back to TAC, and then outputs it to a file with the extension .ssa.tac.
-#    That is, an input file prog.tac should be converted to prog.ssa.tac.
+class IG:
+    def __init__(self):
+        self._nxt = dict()
 
-def ssagen(tacfile,ln):
-    """ TAC file -> CFG -> liveness analysis -> crude SSA generation 
-        --> minimisation steps -> linearises back to TAC 
-        outputs a file with extension .ssa.tac """
-    # list of gvars and procs
-    loaded_tac = load_tac(tacfile)
-    procs = [tac_proc for tac_proc in loaded_tac if isinstance(tac_proc,Proc)]
-    # list: cfg for each proc
-    cfgs = [infer(proc) for proc in procs]
-    # generate crude ssa
-    ssa = [crude_ssa(cfg) for cfg in cfgs]
-    # minimisation steps
-    for cfg in ssa:
-        start=True
-        while start:
-            start = False
-            if nce(cfg)==1: start= True
-            if rename_elim(cfg)==1: start=True
-    if ln==True:
-        # linearise back to TAC
-        for i,proc in enumerate(procs):
-            linearize(proc,ssa[i])
-        output_tac = [gvar for gvar in loaded_tac if isinstance(gvar,Gvar)]+procs
-        # write this TAC to a file
-        tac_filename = tacfile.split(".")[0]+".ssa.tac"
-        with open(tac_filename,'w') as f:
-            for instr in output_tac:
-                f.write(str(instr)+'\n') 
-    return ssa
+    def add_edge(self, f, t):
+        if f == t: return
+        self._nxt.setdefault(f, set()).add(t)
+        self._nxt.setdefault(t, set()).add(f)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("filename",type=str, help="")
-    args = parser.parse_args()
-    ssagen(args.filename,True)
+    def remove_edge(self, f, t):
+        if f == t: return
+        self._nxt[f].discard(t)
+        self._nxt[t].discard(f)
 
+    def remove_node(self, n):
+        for t in self._nxt[n]: self._nxt[t].discard(n)
+        del self._nxt[n]
+
+    def mcs(self):
+        waiting = set(self._nxt.keys())
+        wt = {n: 0 for n in waiting}
+        order = []
+        while len(waiting) > 0:
+            v = max(waiting, key=lambda n: wt[n])
+            order.append(v)
+            for w in self._nxt[v]:
+                if w not in waiting: continue
+                wt[w] += 1
+            waiting.remove(v)
+        return order
+
+    def color(self, *, pre=None, order=None):
+        col = pre.copy() if pre else dict()
+        order = order or self.mcs()
+        for n in self._nxt: col.setdefault(n, 0)
+        for v in order:
+            if col[v] != 0: continue
+            ncols = {col[w] for w in self._nxt[v]}
+            k = 1
+            while True:
+                if k not in ncols: break
+                k += 1
+            col[v] = k
+        for u, vs in self._nxt.items():
+            for v in vs:
+                assert col[u] != col[v]
+        return col
+
+    def write_dot(self, name, filename, col=None):
+        with open(filename, 'w') as f:
+            print(f'graph {name} {{\ngraph[overlap=false];', file=f)
+            ids = {u: k for k, u in enumerate(self._nxt)}
+            for u in self._nxt:
+                k = col[u] if col else '?'
+                print(f'{ids[u]} [label="{u}/{k}",fontname=monospace,fontsize=8];', file=f)
+            for u, vs in self._nxt.items():
+                for v in vs:
+                    if v < u: continue
+                    print(f'{ids[u]} -- {ids[v]};', file=f)
+            print('}', file=f)
+        os.system(f'neato -Tpdf -O {filename}')
+
+# ------------------------------------------------------------------------------
+
+def get_temps(cfg):
+    Val,Ev = {},{}
+    for block in cfg._blockmap.values():
+        if block.label not in Ev:
+            Ev[block.label]=False
+        for instr in block.body:
+            for v in [instr.dest,instr.arg1,instr.arg2]:
+                if (type(v)==str and v[0]=="%") and v not in Val:
+                    Val[v]="Bot"
+    return Val,Ev
+
+def sccp(cfg): #Cases are numbered according to the pdf of the project
+    c_jumps = ['jz', 'jnz', 'jl', 'jle']
+    Val,Ev = get_temps(cfg)
+    #For every temp in input, we set Val(v) to top
+    for temp in cfg.t_args:
+        Val[temp]="Top"
+
+    #For the initial block, we set Ev(B)=True
+    Ev[list(cfg._blockmap.keys())[0]]=True
+
+    #print(Ev)
+    #Visiting blocks and updating Ev
+    order = list(cfg._blockmap.keys())
+    random.shuffle(order)
+    for b in order:
+        definite = False #Presence of a definite jump ()
+        if Ev[b]==True:
+            for instr in cfg._blockmap[b].body:
+                if instr.opcode in c_jumps:
+                    jmp_dst = instr.arg2 #Check if it is indeed arg2
+                    used = use_set(instr)
+                    if len(used)==1:
+                        if Val[used]=="Top":
+                            Ev[jmp_dst]=True
+                        elif Val[used]=="Bot":
+                        #stop further updates based on this and later jumps in B
+                            break
+                        else:
+                        #check conditions, is the jump definite only when condition is satisfied?
+                            x = Val[used]
+                            if instr.opcode=="jz":
+                                if x==0: 
+                                    Ev[jmp_dst],definite=True,True
+                            if instr.opcode == "jnz":
+                                if x!=0: Ev[jmp_dst],definite=True,True
+                            if instr.opcode == "jl":
+                                if x<0: Ev[jmp_dst],definite=True,True
+                            if instr.opcode == "jle":
+                                if x<=0: Ev[jmp_dst],definite=True,True
+
+
+                elif instr.opcode=="jmp":
+                    if definite==False:
+                        Ev[instr.arg1]=True
+    
+                else:
+                    used = use_set(instr)
+                    if instr.opcode=="phi":
+                        used_temps = list(instr.arg1.values())
+                        block_labels = list(instr.arg1.keys())
+
+                        vals = [Val[i] for i in used_temps]
+                        setv = set(vals)
+
+                        #Case 5
+                        if len(setv)==1 and list(setv)[0] not in ["Top","Bot"]: 
+                            Val[instr.dest] = val
+                        
+                        #Case 3
+                        elif len(setv)==2 and "Bot" in setv:
+                            cop = list(setv)
+                            cop.remove("Bot")
+                            if cop[0] not in ["Top","Bot"]:
+                                Val[instr.dest] = val
+                                break
+                        
+                        else:     
+                            #Keep constant value
+                            constants = []
+
+                            for temp in used_temps:
+                                val = Val[temp]
+
+                                if val not in ["Top","Bot"]:
+                                    
+                                    cst.append(temp)
+
+                                    #Case 1
+                                    if len(set(cst))==2:
+                                        Val[instr.dest] = "Top"
+                                        break
+
+                                #Case 2
+                                if val=="Top":
+                                    #We go fetch the block from where it comes from
+                                    origin_block = block_labels[used_temps.index(temp)]
+                                    if Ev[origin_block]==True: 
+                                        Val[instr.dest] = "Top"
+                                        break
+                            
+                            #Case 4
+                            for c_temp in cst:
+                                others = used_temps.remove(c_temp)
+                                n = len(others)
+                                k = 0
+                                for oth in others:
+                                    origin_block = block_labels[used_temps.index(oth)]
+                                    if Ev[origin_block]==True: break
+                                    else: k+=1
+
+                                if k==n:
+                                    Val[instr.dest] = Val[c_temp]
+                        
+                    else:
+                        if len(used)==2:
+                            x = used.pop()
+                            y = used.pop()
+                            if Val[x]=="Top" or Val[y]=="Top":
+                                for temp in def_set(instr): 
+                                    Val[temp]="Top"
+                            elif (Val[x] not in ["Top","Bot"]) and (Val[y] not in ["Top","Bot"]):
+                                dst = def_set(instr)
+                                if instr.opcode=="add": Val[dst]= Val[x]+Val[y]
+                                elif instr.opcode=="sub": Val[dst]= Val[x]-Val[y]
+                                elif instr.opcode=="mul": Val[dst]= Val[x]*Val[y]
+                                elif instr.opcode=="div": Val[dst]= Val[x]/Val[y]
+                                elif instr.opcode=="mod": Val[dst]= Val[x]%Val[y]
+                                elif instr.opcode=="shl": Val[dst]= Val[x]<<Val[y]
+                                elif instr.opcode=="shr": Val[dst]= Val[x]>>Val[y]
+                                elif instr.opcode=="and": Val[dst]= Val[x]&Val[y]
+                                elif instr.opcode=="or": Val[dst]= Val[x]|Val[y]
+                                elif instr.opcode=="xor": Val[dst]= Val[x]^Val[y]
+
+# ------------------------------------------------------------------------------
+
+def ssagen_and_optimise(loaded_tac):
+    for tlv in loaded_tac:
+        if isinstance(tlv, tac.Proc):
+            cfg = tac_cfg.infer(tlv)
+            crude_ssagen(tlv, cfg)
+            dirty = True
+            while dirty: 
+                dirty = False
+                if ssa_minimize(tlv, cfg): dirty = True # rename and nce
+                if cse.run_cse(cfg): dirty = True       # common sub-expression elimination
+                if cfg.copy_propagate(): dirty = True   # copy propagation
+                sccp(cfg)                               # sccp
+            livein, liveout = dict(), dict()
+            tac_cfg.recompute_liveness(cfg, livein, liveout)
+            tac_cfg.linearize(tlv, cfg)
+    return loaded_tac
+
+# ------------------------------------------------------------------------------
+
+if __name__ == '__main__':
+    import os
+    from argparse import ArgumentParser
+    ap = ArgumentParser(description='TAC library, parser, and interpreter')
+    ap.add_argument('file', metavar='FILE', type=str, nargs=1, help='A TAC file')
+    ap.add_argument('-v', dest='verbosity', default=0, action='count',
+                    help='increase verbosity')
+    args = ap.parse_args()
+    gvars, procs = dict(), dict()
+    for tlv in tac.load_tac(args.file[0]):
+        if isinstance(tlv, tac.Proc):
+            cfg = tac_cfg.infer(tlv)
+            crude_ssagen(tlv, cfg)
+            ssa_minimize(tlv, cfg)
+            livein, liveout = dict(), dict()
+            tac_cfg.recompute_liveness(cfg, livein, liveout)
+            tac_cfg.linearize(tlv, cfg)
+            if args.verbosity >= 2:
+                print(tlv)

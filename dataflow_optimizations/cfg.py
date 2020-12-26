@@ -82,6 +82,7 @@ class Block:
     def copy_propagate(self):
         # simple copy propagation inside a block
         instrs = list(self.instrs())
+        change = False
         for i in range(len(instrs)):
             if instrs[i].opcode != 'copy': continue
             t_old = instrs[i].arg1
@@ -89,13 +90,15 @@ class Block:
             for j in range(i+1, len(instrs)):
                 if instrs[j].arg1 == t_new:
                     instrs[j].arg1 = t_old
+                    change = True
                 if instrs[j].arg2 == t_new:
                     instrs[j].arg2 = t_old
+                    change = True
                 if instrs[j].dest in (t_old, t_new):
                     break
         self.body  = instrs[:len(self.body)]
         self.jumps = instrs[len(self.body):]
-
+        return change
 
     
 
@@ -134,15 +137,6 @@ class CFG:
         Recall that cfg.__getitem__(lab) can be written as cfg[lab].
         """
         return self._blockmap[lab]
-    
-    def __repr__(self):
-        rep = ""
-        for b in self._blockmap.values():
-            rep+=str(b)
-        return rep
-
-    def __eq__(self,other):
-        return self.proc_name == other.proc_name and self.lab_entry == other.lab_entry and self._blockmap == other._blockmap and self._fwd == other._fwd and self._bwd == other._bwd
 
     def successors(self, lab):
         """Returns iterator over immediate successor blocks"""
@@ -158,6 +152,9 @@ class CFG:
     def in_degree(self, lab):
         return len(self._bwd[lab])
 
+    def nodes(self):
+        return iter(self._blockmap.values())
+
     def edges(self):
         """
         Returns an iterator over all the edges.
@@ -172,7 +169,7 @@ class CFG:
         self._blockmap[block.label] = block
         self._fwd[block.label] = set()
         self._bwd[block.label] = set()
-        for jinstr in block.jumps:
+        for jinstr in bl.jumps:
             dest = get_jump_dest(jinstr)
             if dest: self.add_edge(block.label, dest)
 
@@ -195,16 +192,24 @@ class CFG:
         for bl in self._blockmap.values():
             yield from bl.instrs()
 
-    def instr_pairs(self):
-        """The order of visiting the sequences is unspecified."""
+    def instr_pairs(self, labeled=False):
+        """
+        The order of visiting the sequences is unspecified. If `labeled' is
+        True, then yield a 4-tuple of the form (l1, i1, l2, i2) where
+        l1 and l2 are the labels of the blocks containing i1 and i2.
+        """
         # iterate over the edges
         for lab_from, lab_to in self.edges():
             i1 = self._blockmap[lab_from].last_instr()
             i2 = self._blockmap[lab_to].first_instr()
-            yield (i1, i2)
+            if labeled: yield (lab_from, i1, lab_to, i2)
+            else: yield (i1, i2)
         # iterate over the instruction pairs inside a block
         for bl in self._blockmap.values():
-            yield from bl.instr_pairs()
+            if labeled:
+                for i1, i2 in bl.instr_pairs():
+                    yield (bl.label, i1, bl.label, i2)
+            else: yield from bl.instr_pairs()
 
     def write_dot(self, tacfile):
         dotfile = f'{tacfile}.{self.proc_name[1:]}.dot'
@@ -219,8 +224,10 @@ class CFG:
             print('}', file=f)
 
     def copy_propagate(self):
+        change = False
         for block in self._blockmap.values():
-            block.copy_propagate()
+            if block.copy_propagate(): change = True
+        return change
 
 
 # ------------------------------------------------------------------------------
@@ -237,7 +244,7 @@ def apply_label_rewrite(jinstr, tab):
     if jinstr.opcode == 'jmp':
         jinstr.arg1 = tab.get(jinstr.arg1, jinstr.arg1)
     elif jinstr.opcode == 'phi':
-        jinstr.arg1 = tuple((tab.get(lab, lab), tmp) for (lab, tmp) in jinstr.arg1)
+        jinstr.arg1 = tuple((tab.get(lab, lab), tmp) for (lab, tmp) in jinstr.arg1.items())
     elif jinstr.opcode != 'ret':
         jinstr.arg2 = tab.get(jinstr.arg2, jinstr.arg2)
 
