@@ -1,0 +1,9 @@
+// addition
+
+proc main() {
+  var x = 42 : int;
+  var y = 84 : int;
+  print(x + y);
+  var z = x + y : int;
+  print(z);
+}
