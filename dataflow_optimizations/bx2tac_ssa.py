@@ -390,6 +390,37 @@ class ssafile:
                                         change = 1
         return change
 
+    def dead_copy_elim(self,cfg):
+        change = 0
+        for b in cfg._blockmap.values():
+            
+            to_delete = []          
+            for instr in b.body:
+                # dead store
+                livein = self.live_in(cfg)
+                liveout = self.live_out(cfg,livein)
+
+                if not self.def_set(instr).issubset(liveout[instr]):
+                    # call instr
+                    if instr.opcode == 'call':
+                        if instr.dest != '%_':
+                            change = 1
+                            instr.dest = '%_'
+                    # arithmetic operation
+                    elif instr.opcode in ['add', 'sub', 'mul', 'div', 'mod', 'neg', 'and', 'or',
+                                            'xor', 'not', 'shl', 'shr', 'const', 'copy']:
+                        to_delete.append(instr)
+                        change = 1
+
+            
+            for instr in reversed(to_delete):
+                b.body.remove(instr)
+        
+            
+        return change
+            
+        
+
     def get_temps(self,cfg):
         #Function that returns the initial Val and Ev mappings
         Val,Ev = {},{}
@@ -609,6 +640,7 @@ def optimise(ssag,ssa):
             if ssag.rename_elim(cfg)==1:    start = True
             if cse.run_cse(cfg)==1:         start = True
             if cfg.copy_propagate()==1:     start = True
+            if ssag.dead_copy_elim(cfg)==1: start = True
 
 # ------------------------------------------------------------------------------
 
