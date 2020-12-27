@@ -275,10 +275,10 @@ def sccp(cfg): #Cases are numbered according to the pdf of the project
 
                                 if val not in ["Top","Bot"]:
                                     
-                                    cst.append(temp)
+                                    constants.append(temp)
 
                                     #Case 1
-                                    if len(set(cst))==2:
+                                    if len(set(constants))==2:
                                         Val[instr.dest] = "Top"
                                         break
 
@@ -291,7 +291,7 @@ def sccp(cfg): #Cases are numbered according to the pdf of the project
                                         break
                             
                             #Case 4
-                            for c_temp in cst:
+                            for c_temp in constants:
                                 others = used_temps.remove(c_temp)
                                 n = len(others)
                                 k = 0
