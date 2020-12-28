@@ -188,8 +188,68 @@ class IG:
         os.system(f'neato -Tpdf -O {filename}')
 
 # ------------------------------------------------------------------------------
+def live_in(cfg):
+    livein = dict()
+    for instr in cfg.instrs():
+        livein[instr] = use_set(instr)
+    # run the livein set update loop until there are no more changes
+    dirty = True
+    while dirty:
+        dirty = False
+        for (i1, i2) in cfg.instr_pairs():
+            t_live = livein[i2].difference(def_set(i1))
+            if not t_live.issubset(livein[i1]):
+                dirty = True # there was a change, so run it again
+                livein[i1] = livein[i1].union(t_live)
+    return livein
+
+def live_out(cfg,livein):
+        liveout = dict()
+        for block in cfg._blockmap.values():
+            for i,instr in enumerate(block.instrs()):
+                block_instrs =list(block.instrs())
+                for j in range(i+1,len(block_instrs)):
+                    if instr in liveout.keys(): liveout[instr] = (livein[block_instrs[j]]).union(liveout[instr])
+                    else: liveout[instr] = livein[block_instrs[j]]
+                for succ_block in [cfg[label] for label in cfg.successors(block.label)]:
+                    for succ_instr in succ_block.instrs():
+                        if instr in liveout.keys(): liveout[instr] = (livein[succ_instr]).union(liveout[instr])
+                        else: liveout[instr] = livein[succ_instr]
+        return liveout
+
+
+def dead_copy_elim(cfg):
+    change = 0
+    for b in cfg._blockmap.values():
+        #print("BEFORE\n",b)
+        to_delete = []          
+        for instr in b.body:
+            # dead store
+            livein = live_in(cfg)
+            liveout = live_out(cfg,livein)
+
+            if not def_set(instr).issubset(liveout[instr]):
+                # call instr
+                if instr.opcode == 'call':
+                    if instr.dest != '%_':
+                        change = 1
+                        instr.dest = '%_'
+                # arithmetic operation
+                elif instr.opcode in ['add', 'sub', 'mul', 'div', 'mod', 'neg', 'and', 'or',
+                                        'xor', 'not', 'shl', 'shr', 'const', 'copy']:
+                    to_delete.append(instr)
+                    change = 1
+
+        
+        for instr in reversed(to_delete):
+            b.body.remove(instr)
+
+        #print("AFTER\n",b)
+        
+    return change
 
 def get_temps(cfg):
+    #Function that returns the initial Val and Ev mappings
     Val,Ev = {},{}
     for block in cfg._blockmap.values():
         if block.label not in Ev:
@@ -200,7 +260,9 @@ def get_temps(cfg):
                     Val[v]="Bot"
     return Val,Ev
 
-def sccp(cfg): #Cases are numbered according to the pdf of the project
+def sccp(cfg): 
+    #We fill Ev and Var with the initial block and arguments
+
     c_jumps = ['jz', 'jnz', 'jl', 'jle']
     Val,Ev = get_temps(cfg)
     #For every temp in input, we set Val(v) to top
@@ -210,119 +272,146 @@ def sccp(cfg): #Cases are numbered according to the pdf of the project
     #For the initial block, we set Ev(B)=True
     Ev[list(cfg._blockmap.keys())[0]]=True
 
-    #print(Ev)
     #Visiting blocks and updating Ev
     order = list(cfg._blockmap.keys())
     random.shuffle(order)
-    for b in order:
-        definite = False #Presence of a definite jump ()
-        if Ev[b]==True:
-            for instr in cfg._blockmap[b].body:
-                if instr.opcode in c_jumps:
-                    jmp_dst = instr.arg2 #Check if it is indeed arg2
-                    used = use_set(instr)
-                    if len(used)==1:
-                        if Val[used]=="Top":
-                            Ev[jmp_dst]=True
-                        elif Val[used]=="Bot":
-                        #stop further updates based on this and later jumps in B
-                            break
-                        else:
-                        #check conditions, is the jump definite only when condition is satisfied?
-                            x = Val[used]
-                            if instr.opcode=="jz":
-                                if x==0: 
-                                    Ev[jmp_dst],definite=True,True
-                            if instr.opcode == "jnz":
-                                if x!=0: Ev[jmp_dst],definite=True,True
-                            if instr.opcode == "jl":
-                                if x<0: Ev[jmp_dst],definite=True,True
-                            if instr.opcode == "jle":
-                                if x<=0: Ev[jmp_dst],definite=True,True
-
-
-                elif instr.opcode=="jmp":
-                    if definite==False:
-                        Ev[instr.arg1]=True
     
-                else:
-                    used = use_set(instr)
-                    if instr.opcode=="phi":
-                        used_temps = list(instr.arg1.values())
-                        block_labels = list(instr.arg1.keys())
+    #We then repeat the below process until there is no change in Ev or Var
+    changed = True
+    while changed:
+        
+        changed = False
 
-                        vals = [Val[i] for i in used_temps]
-                        setv = set(vals)
-
-                        #Case 5
-                        if len(setv)==1 and list(setv)[0] not in ["Top","Bot"]: 
-                            Val[instr.dest] = val
-                        
-                        #Case 3
-                        elif len(setv)==2 and "Bot" in setv:
-                            cop = list(setv)
-                            cop.remove("Bot")
-                            if cop[0] not in ["Top","Bot"]:
-                                Val[instr.dest] = val
+        for b in order:
+            definite = False #Presence of a definite jump ()
+            if Ev[b]==True:
+                for instr in cfg._blockmap[b].body:
+                    #Case of conditional jumps
+                    if instr.opcode in c_jumps:
+                        jmp_dst = instr.arg2 #Check if it is indeed arg2
+                        used = use_set(instr)
+                        if len(used)==1:
+                            if Val[used]=="Top":
+                                Ev[jmp_dst]=True
+                                changed = True
+                            elif Val[used]=="Bot":
+                            #stop further updates based on this and later jumps in B
                                 break
-                        
-                        else:     
-                            #Keep constant value
-                            constants = []
+                            else:
+                                x = Val[used]
+                                if instr.opcode=="jz":
+                                    if x==0: 
+                                        Ev[jmp_dst],definite=True,True
+                                        changed = True
+                                if instr.opcode == "jnz":
+                                    if x!=0: 
+                                        Ev[jmp_dst],definite=True,True
+                                        changed = True
+                                if instr.opcode == "jl":
+                                    if x<0: 
+                                        Ev[jmp_dst],definite=True,True
+                                        changed = True
+                                if instr.opcode == "jle":
+                                    if x<=0: 
+                                        Ev[jmp_dst],definite=True,True
+                                        changed = True
 
-                            for temp in used_temps:
-                                val = Val[temp]
-
-                                if val not in ["Top","Bot"]:
-                                    
-                                    constants.append(temp)
-
-                                    #Case 1
-                                    if len(set(constants))==2:
-                                        Val[instr.dest] = "Top"
-                                        break
-
-                                #Case 2
-                                if val=="Top":
-                                    #We go fetch the block from where it comes from
-                                    origin_block = block_labels[used_temps.index(temp)]
-                                    if Ev[origin_block]==True: 
-                                        Val[instr.dest] = "Top"
-                                        break
-                            
-                            #Case 4
-                            for c_temp in constants:
-                                others = used_temps.remove(c_temp)
-                                n = len(others)
-                                k = 0
-                                for oth in others:
-                                    origin_block = block_labels[used_temps.index(oth)]
-                                    if Ev[origin_block]==True: break
-                                    else: k+=1
-
-                                if k==n:
-                                    Val[instr.dest] = Val[c_temp]
-                        
+                    #Case of jump
+                    elif instr.opcode=="jmp":
+                        if definite==False:
+                            Ev[instr.arg1]=True
+                            changed = True
+        
                     else:
-                        if len(used)==2:
-                            x = used.pop()
-                            y = used.pop()
-                            if Val[x]=="Top" or Val[y]=="Top":
-                                for temp in def_set(instr): 
-                                    Val[temp]="Top"
-                            elif (Val[x] not in ["Top","Bot"]) and (Val[y] not in ["Top","Bot"]):
-                                dst = def_set(instr)
-                                if instr.opcode=="add": Val[dst]= Val[x]+Val[y]
-                                elif instr.opcode=="sub": Val[dst]= Val[x]-Val[y]
-                                elif instr.opcode=="mul": Val[dst]= Val[x]*Val[y]
-                                elif instr.opcode=="div": Val[dst]= Val[x]/Val[y]
-                                elif instr.opcode=="mod": Val[dst]= Val[x]%Val[y]
-                                elif instr.opcode=="shl": Val[dst]= Val[x]<<Val[y]
-                                elif instr.opcode=="shr": Val[dst]= Val[x]>>Val[y]
-                                elif instr.opcode=="and": Val[dst]= Val[x]&Val[y]
-                                elif instr.opcode=="or": Val[dst]= Val[x]|Val[y]
-                                elif instr.opcode=="xor": Val[dst]= Val[x]^Val[y]
+                        used = use_set(instr)
+                        #Cases of phi instruction (numbered as in the pdf of the project task)
+                        if instr.opcode=="phi":
+                            used_temps = list(instr.arg1.values())
+                            block_labels = list(instr.arg1.keys())
 
+                            vals = [Val[i] for i in used_temps]
+                            setv = set(vals)
+
+                            #Case 5
+                            if len(setv)==1 and list(setv)[0] not in ["Top","Bot"]: 
+                                Val[instr.dest] = val
+                                changed = True
+                            
+                            #Case 3
+                            elif len(setv)==2 and "Bot" in setv:
+                                cop = list(setv)
+                                cop.remove("Bot")
+                                if cop[0] not in ["Top","Bot"]:
+                                    Val[instr.dest] = val
+                                    changed = True
+                                    break
+                            
+                            else:     
+                                #Keep constant value
+                                cst = []
+
+                                for temp in used_temps:
+                                    val = Val[temp]
+
+                                    if val not in ["Top","Bot"]:
+                                        
+                                        cst.append(temp)
+
+                                        #Case 1
+                                        if len(set(cst))==2:
+                                            Val[instr.dest] = "Top"
+                                            changed = True
+                                            break
+
+                                    #Case 2
+                                    if val=="Top":
+                                        #We go fetch the block from where it comes from
+                                        origin_block = block_labels[used_temps.index(temp)]
+                                        if Ev[origin_block]==True: 
+                                            Val[instr.dest] = "Top"
+                                            changed = True
+                                            break
+                                
+                                #Case 4
+                                for c_temp in cst:
+                                    others = used_temps.remove(c_temp)
+                                    n = len(others)
+                                    k = 0
+                                    for oth in others:
+                                        origin_block = block_labels[used_temps.index(oth)]
+                                        if Ev[origin_block]==True: break
+                                        else: k+=1
+
+                                    if k==n:
+                                        Val[instr.dest] = Val[c_temp]
+                                        changed = True
+                            
+                        else:
+                            if len(used)==2:
+                                x = used.pop()
+                                y = used.pop()
+                                if Val[x]=="Top" or Val[y]=="Top":
+                                    for temp in self.def_set(instr): 
+                                        Val[temp]="Top"
+                                        changed = True
+                                elif (Val[x] not in ["Top","Bot"]) and (Val[y] not in ["Top","Bot"]):
+                                    changed = True
+                                    dst = self.def_set(instr)
+                                    if instr.opcode=="add": Val[dst]= Val[x]+Val[y]
+                                    elif instr.opcode=="sub": Val[dst]= Val[x]-Val[y]
+                                    elif instr.opcode=="mul": Val[dst]= Val[x]*Val[y]
+                                    elif instr.opcode=="div": Val[dst]= Val[x]/Val[y]
+                                    elif instr.opcode=="mod": Val[dst]= Val[x]%Val[y]
+                                    elif instr.opcode=="shl": Val[dst]= Val[x]<<Val[y]
+                                    elif instr.opcode=="shr": Val[dst]= Val[x]>>Val[y]
+                                    elif instr.opcode=="and": Val[dst]= Val[x]&Val[y]
+                                    elif instr.opcode=="or": Val[dst]= Val[x]|Val[y]
+                                    elif instr.opcode=="xor": Val[dst]= Val[x]^Val[y]
+
+        #print(Ev,Val)
+        
+        #If the above code was working, we would then delete some instructions
+        # according to Ev and Val.
 # ------------------------------------------------------------------------------
 
 def ssagen_and_optimise(loaded_tac):
@@ -336,7 +425,8 @@ def ssagen_and_optimise(loaded_tac):
                 if ssa_minimize(tlv, cfg): dirty = True # rename and nce
                 if cse.run_cse(cfg): dirty = True       # common sub-expression elimination
                 if cfg.copy_propagate(): dirty = True   # copy propagation
-                sccp(cfg)                               # sccp
+                if dead_copy_elim(cfg)==1: dirty = True
+                #sccp(cfg)     <- The function has problems 
             livein, liveout = dict(), dict()
             tac_cfg.recompute_liveness(cfg, livein, liveout)
             tac_cfg.linearize(tlv, cfg)

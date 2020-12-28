@@ -230,6 +230,8 @@ class CFG:
         return change
 
 
+
+
 # ------------------------------------------------------------------------------
 
 import re
@@ -389,6 +391,7 @@ def filter_liveset(lab, lset):
         if isinstance(x, tuple):
             if x[0] == lab: yield x[1]
         else: yield x
+
 
 def recompute_liveness(cfg, livein, liveout):
     """Perform liveness analysis on the given cfg, storing the results in `livein' and `liveout'.
