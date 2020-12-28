@@ -37,10 +37,10 @@ The code for this is found in `cfg.py`. Copy progagation is implemented as befor
 **constant propagation still to be implemented**
 
 #### b) Dead Store Elimination (DSE) (Antonin): 
-**explain**
+The code is found in ssagen.py
 
 #### c) Sparse Conditional Constant Propagation (SCCP) (Amine): 
-**explain**
+The code is found in ssagen.py. All conditions have been written but the function is not updating the Ev and Val mappings as it should
 
 #### d) Dominator tree of the CFG and Common Subexpression Elimination (CSE) (Anya): 
 This code is found in `cse.py`. We first create a dominator tree of the labels of the CFG. This is the simplest dominator tree to compute and is all that is necessary. This follows 'Algorithm: Compute Dominators' in the project handout. 
